@@ -6,11 +6,9 @@ Open the URL and the latest matches are already on screen: no install, no sign-i
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -28,8 +26,6 @@ from scanner import (
 )
 
 CHECK_EVERY_MINUTES = 15
-DATA_DIR = Path(os.environ.get("XKS_DATA_DIR", ".data"))
-RESULTS_FILE = DATA_DIR / "results.json"
 
 st.set_page_config(page_title="X Keyword Search", page_icon="🔎", layout="wide")
 
@@ -63,24 +59,9 @@ DEFAULT_KEYWORDS = (
 
 # --------------------------------------------------------------------------- state
 
-def _load_results() -> list[dict]:
-    try:
-        return json.loads(RESULTS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def _save_results(results: list[dict]) -> None:
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        RESULTS_FILE.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass  # hosted disks are temporary; the table still works from session state
-
-
 if "results" not in st.session_state:
-    st.session_state.results = _load_results()
-    st.session_state.seen_ids = {r["id"] for r in st.session_state.results}
+    st.session_state.results = []
+    st.session_state.seen_ids = set()
     st.session_state.status = ""
     st.session_state.last_auto = 0.0
     st.session_state.first_load_done = False
@@ -97,7 +78,16 @@ if st.session_state.pop("reset_requested", False):
     st.session_state.keywords_raw = ""
     st.query_params.clear()
 
-CONFIGURED = bool(list_id_from(st.session_state.list_link) and st.session_state.keywords_raw.strip())
+# Results belong to one List. Switching Lists clears them so matches from a
+# previous List can never appear under a new one.
+_current_list = list_id_from(st.session_state.list_link) or ""
+if st.session_state.get("results_list_id") != _current_list:
+    st.session_state.results_list_id = _current_list
+    st.session_state.results = []
+    st.session_state.seen_ids = set()
+    st.session_state.first_load_done = False  # so the new List is checked straight away
+
+CONFIGURED = bool(_current_list and st.session_state.keywords_raw.strip())
 
 
 @st.cache_data(ttl=CHECK_EVERY_MINUTES * 60, show_spinner=False)
@@ -145,7 +135,6 @@ def run_check(list_link: str, keywords_raw: str, lookback_label: str, quiet: boo
             st.session_state.results.append(row)
             st.session_state.seen_ids.add(p["id"])
             new += 1
-    _save_results(st.session_state.results)
     now = datetime.now().strftime("%I:%M %p").lstrip("0")
     st.session_state.status = (
         f"Checked at {now}: read {len(posts)} posts from the last {lookback_label}, "
@@ -176,7 +165,6 @@ def send_summary(to: str, fmt: str, list_link: str, only_unsent: bool, window: s
         return
     for r in items:
         r["emailed"] = True
-    _save_results(st.session_state.results)
     st.session_state.status = (
         f"Emailed {len(items)} match{'es' if len(items) != 1 else ''} to {to} at "
         f"{datetime.now().strftime('%I:%M %p').lstrip('0')}."
