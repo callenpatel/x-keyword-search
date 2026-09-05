@@ -258,7 +258,7 @@ def _html_escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def build_summary_html(matches: list[dict], list_url: str) -> str:
+def build_summary_html(matches: list[dict], list_url: str, window: str = "") -> str:
     rows = []
     for r in matches:
         rows.append(
@@ -275,7 +275,8 @@ def build_summary_html(matches: list[dict], list_url: str) -> str:
     return (
         "<html><body style='font-family:Helvetica,Arial,sans-serif;font-size:14px;color:#222'>"
         "<h2 style='margin-bottom:4px'>X keyword matches</h2>"
-        f"<p style='color:#666;margin-top:0'>{len(matches)} match{'es' if len(matches) != 1 else ''} "
+        f"<p style='color:#666;margin-top:0'>{len(matches)} match{'es' if len(matches) != 1 else ''}"
+        f"{' from the last ' + _html_escape(window) if window else ''} "
         f"&middot; <a href='{_html_escape(list_url)}'>the List</a></p>"
         "<table cellpadding='8' cellspacing='0' style='border-collapse:collapse;border:1px solid #ddd'>"
         "<tr style='background:#f3f4f6'><th align='left'>When</th><th align='left'>Who</th>"
@@ -302,7 +303,7 @@ def build_csv(matches: list[dict]) -> str:
 
 # --------------------------------------------------------------------------- email
 
-def send_email(to: str, matches: list[dict], fmt: str, list_url: str) -> None:
+def send_email(to: str, matches: list[dict], fmt: str, list_url: str, window: str = "") -> None:
     """Send the summary. Raises with a readable message on failure."""
     import smtplib
     from email.message import EmailMessage
@@ -311,7 +312,8 @@ def send_email(to: str, matches: list[dict], fmt: str, list_url: str) -> None:
         raise RuntimeError("No sending email account is configured for this app.")
     n = len(matches)
     msg = EmailMessage()
-    msg["Subject"] = f"X keyword matches: {n} new" if n else "X keyword matches: nothing new"
+    suffix = f" in the last {window}" if window else ""
+    msg["Subject"] = f"X keyword matches: {n} new{suffix}" if n else f"X keyword matches: nothing new{suffix}"
     msg["From"] = sender_email()
     msg["To"] = to
     lines = [
@@ -332,7 +334,7 @@ def send_email(to: str, matches: list[dict], fmt: str, list_url: str) -> None:
             filename=f"x-keyword-matches-{datetime.now().strftime('%Y-%m-%d')}.csv",
         )
     else:
-        msg.add_alternative(build_summary_html(matches, list_url), subtype="html")
+        msg.add_alternative(build_summary_html(matches, list_url, window), subtype="html")
     with smtplib.SMTP_SSL(smtp_host(), smtp_port(), timeout=45) as s:
         s.login(sender_email(), sender_password().replace(" ", ""))
         s.send_message(msg)

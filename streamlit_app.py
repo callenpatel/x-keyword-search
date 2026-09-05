@@ -154,19 +154,23 @@ def run_check(list_link: str, keywords_raw: str, lookback_label: str, quiet: boo
     )
 
 
-def send_summary(to: str, fmt: str, list_link: str, only_unsent: bool) -> None:
-    items = sorted(st.session_state.results, key=lambda x: x.get("time", ""), reverse=True)
+def send_summary(to: str, fmt: str, list_link: str, only_unsent: bool, window: str) -> None:
+    # The email covers the same window shown on screen. It used to be hardcoded to
+    # 7 days, which meant the dropdown said one thing and the email sent another.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_CHOICES.get(window, 2))).isoformat()
+    items = [r for r in sorted(st.session_state.results, key=lambda x: x.get("time", ""), reverse=True)
+             if r.get("time", "") >= cutoff]
     if only_unsent:
         items = [r for r in items if not r.get("emailed")]
-    else:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        items = [r for r in items if r.get("time", "") >= cutoff] or items[:50]
     if not items:
-        st.session_state.status = "Nothing to email yet."
+        st.session_state.status = (
+            f"Nothing in the last {window} to email."
+            if not only_unsent else f"No new matches in the last {window} to email."
+        )
         return
     try:
         with st.spinner(f"Emailing {len(items)} matches to {to}..."):
-            scanner.send_email(to, items, fmt, list_link)
+            scanner.send_email(to, items, fmt, list_link, window)
     except Exception as e:
         st.session_state.status = f"Email failed: {e}"
         return
@@ -284,13 +288,13 @@ if not st.session_state.first_load_done:
 if check_clicked or st.session_state.pop("lookback_changed", False):
     run_check(list_link, keywords_raw, lookback, quiet=not check_clicked)
     if check_clicked and st.session_state.get("email_on_check") and email_to:
-        send_summary(email_to, email_fmt, list_link, only_unsent=True)
+        send_summary(email_to, email_fmt, list_link, only_unsent=True, window=lookback)
 
 if scanner.email_ready() and send_clicked:
     if not email_to:
         st.session_state.status = "Type your email address first."
     else:
-        send_summary(email_to, email_fmt, list_link, only_unsent=False)
+        send_summary(email_to, email_fmt, list_link, only_unsent=False, window=lookback)
 
 
 @st.fragment(run_every=60 if st.session_state.get("auto") else None)
