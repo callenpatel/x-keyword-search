@@ -201,7 +201,13 @@ if CONFIGURED:
             help="A line can be a name or a phrase. Matching is whole-word and ignores capitals, "
                  'so "ICE" will not match "service".',
         )
-        st.selectbox("Each check looks back", list(LOOKBACK_CHOICES), key="lookback")
+        st.selectbox(
+            "Show matches from the last",
+            list(LOOKBACK_CHOICES),
+            key="lookback",
+            on_change=lambda: st.session_state.update(lookback_changed=True),
+            help="Sets both how far back a check reads and how far back the table shows.",
+        )
         check_clicked = st.button("Check now", type="primary", width="stretch")
         st.checkbox(f"Keep checking every {CHECK_EVERY_MINUTES} minutes", key="auto", value=True)
         st.caption("Automatic checks run while this tab is open.")
@@ -275,9 +281,9 @@ if not st.session_state.first_load_done:
     st.session_state.last_auto = time.time()
     run_check(list_link, keywords_raw, lookback, quiet=True)
 
-if check_clicked:
-    run_check(list_link, keywords_raw, lookback)
-    if st.session_state.get("email_on_check") and email_to:
+if check_clicked or st.session_state.pop("lookback_changed", False):
+    run_check(list_link, keywords_raw, lookback, quiet=not check_clicked)
+    if check_clicked and st.session_state.get("email_on_check") and email_to:
         send_summary(email_to, email_fmt, list_link, only_unsent=True)
 
 if scanner.email_ready() and send_clicked:
@@ -303,10 +309,19 @@ def results_panel() -> None:
     if st.session_state.status:
         st.info(st.session_state.status)
 
-    results = sorted(st.session_state.results, key=lambda x: x.get("time", ""), reverse=True)
+    # The window governs what is shown, not just what was fetched. Without this the
+    # table keeps every match ever found and the dropdown looks like it does nothing.
+    window = st.session_state.get("lookback", DEFAULT_LOOKBACK)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_CHOICES.get(window, 2))).isoformat()
+    everything = sorted(st.session_state.results, key=lambda x: x.get("time", ""), reverse=True)
+    results = [r for r in everything if r.get("time", "") >= cutoff]
+    hidden = len(everything) - len(results)
+
     n = len(results)
     head, dl = st.columns([4, 1])
-    head.subheader(f"{n} match{'es' if n != 1 else ''} found so far")
+    head.subheader(f"{n} match{'es' if n != 1 else ''} in the last {window}")
+    if hidden:
+        head.caption(f"{hidden} older match{'es' if hidden != 1 else ''} outside this window, not shown.")
     if results:
         dl.download_button(
             "Download spreadsheet",
@@ -317,7 +332,10 @@ def results_panel() -> None:
         )
 
     if not results:
-        st.write("No matches yet. Add a List link and keywords in the sidebar, then click Check now.")
+        if hidden:
+            st.write(f"Nothing in the last {window}. Widen the window in the sidebar to see older matches.")
+        else:
+            st.write("No matches yet. Click Check now in the sidebar.")
         return
 
     df = pd.DataFrame([
