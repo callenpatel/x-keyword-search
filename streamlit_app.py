@@ -49,9 +49,16 @@ def _load_secrets_into_env() -> None:
 
 _load_secrets_into_env()
 
-# Shipped defaults, so the app is useful the second it loads with nothing typed in.
-DEFAULT_LIST_URL = (os.environ.get("DEFAULT_LIST_URL") or "").strip()
-DEFAULT_KEYWORDS = (os.environ.get("DEFAULT_KEYWORDS") or "").strip().replace("\\n", "\n")
+# Starting values, in order of precedence:
+#   1. the link itself   ?list=...&kw=ICE,voted+against
+#   2. secrets set on the host
+#   3. nothing, and the app asks on first load
+_qp = st.query_params
+DEFAULT_LIST_URL = (_qp.get("list") or os.environ.get("DEFAULT_LIST_URL") or "").strip()
+DEFAULT_KEYWORDS = (
+    (_qp.get("kw") or "").replace(",", "\n").strip()
+    or (os.environ.get("DEFAULT_KEYWORDS") or "").strip().replace("\\n", "\n")
+)
 
 
 # --------------------------------------------------------------------------- state
@@ -77,6 +84,20 @@ if "results" not in st.session_state:
     st.session_state.status = ""
     st.session_state.last_auto = 0.0
     st.session_state.first_load_done = False
+
+# The inputs live in session state so the setup panel and the sidebar can both write them.
+st.session_state.setdefault("list_link", DEFAULT_LIST_URL)
+st.session_state.setdefault("keywords_raw", DEFAULT_KEYWORDS)
+st.session_state.setdefault("lookback", DEFAULT_LOOKBACK)
+
+# Handled here, at the top of the run: a widget-backed key cannot be reassigned
+# once its widget has been drawn, so the button only raises a flag.
+if st.session_state.pop("reset_requested", False):
+    st.session_state.list_link = ""
+    st.session_state.keywords_raw = ""
+    st.query_params.clear()
+
+CONFIGURED = bool(list_id_from(st.session_state.list_link) and st.session_state.keywords_raw.strip())
 
 
 @st.cache_data(ttl=CHECK_EVERY_MINUTES * 60, show_spinner=False)
@@ -160,48 +181,93 @@ def send_summary(to: str, fmt: str, list_link: str, only_unsent: bool) -> None:
 
 # --------------------------------------------------------------------------- sidebar
 
-with st.sidebar:
-    st.subheader("What to watch")
-    list_link = st.text_input(
-        "X List link",
-        value=DEFAULT_LIST_URL,
-        key="list_link",
-        placeholder="https://x.com/i/lists/1234567890",
-        help="Open the List on x.com and paste the address.",
-    )
-    keywords_raw = st.text_area(
-        "Keywords, one per line",
-        value=DEFAULT_KEYWORDS,
-        key="keywords_raw",
-        height=160,
-        help="A line can be a name or a phrase. Matching is whole-word and ignores capitals, "
-             'so "ICE" will not match "service".',
-    )
-    lookback = st.selectbox(
-        "Each check looks back",
-        list(LOOKBACK_CHOICES),
-        index=list(LOOKBACK_CHOICES).index(DEFAULT_LOOKBACK),
-        key="lookback",
-    )
-    check_clicked = st.button("Check now", type="primary", width="stretch")
-    st.checkbox(f"Keep checking every {CHECK_EVERY_MINUTES} minutes", key="auto", value=True)
-    st.caption("Automatic checks run while this tab is open.")
+check_clicked = False
+send_clicked = False
+email_to, email_fmt = "", EMAIL_FORMATS[0]
 
-    st.divider()
-    st.subheader("Email me")
-    if not scanner.email_ready():
-        st.caption("Email sending is not configured for this app.")
-        email_to, email_fmt, send_clicked = "", EMAIL_FORMATS[0], False
-    else:
-        email_to = st.text_input("Your email address", key="email_to", placeholder="you@example.com")
-        email_fmt = st.radio("Format", EMAIL_FORMATS, key="email_fmt")
-        send_clicked = st.button("Send me a summary now", width="stretch")
-        st.checkbox("Also email after each check that finds something new", key="email_on_check")
+if CONFIGURED:
+    with st.sidebar:
+        st.subheader("What to watch")
+        st.text_input(
+            "X List link",
+            key="list_link",
+            placeholder="https://x.com/i/lists/1234567890",
+            help="Open the List on x.com and paste the address.",
+        )
+        st.text_area(
+            "Keywords, one per line",
+            key="keywords_raw",
+            height=160,
+            help="A line can be a name or a phrase. Matching is whole-word and ignores capitals, "
+                 'so "ICE" will not match "service".',
+        )
+        st.selectbox("Each check looks back", list(LOOKBACK_CHOICES), key="lookback")
+        check_clicked = st.button("Check now", type="primary", width="stretch")
+        st.checkbox(f"Keep checking every {CHECK_EVERY_MINUTES} minutes", key="auto", value=True)
+        st.caption("Automatic checks run while this tab is open.")
+        if st.button("Watch a different List", width="stretch"):
+            st.session_state.reset_requested = True
+            st.rerun()
+
+        st.divider()
+        st.subheader("Email me")
+        if not scanner.email_ready():
+            st.caption("Email sending is not configured for this app.")
+        else:
+            email_to = st.text_input("Your email address", key="email_to", placeholder="you@example.com")
+            email_fmt = st.radio("Format", EMAIL_FORMATS, key="email_fmt")
+            send_clicked = st.button("Send me a summary now", width="stretch")
+            st.checkbox("Also email after each check that finds something new", key="email_on_check")
+
+list_link = st.session_state.list_link
+keywords_raw = st.session_state.keywords_raw
+lookback = st.session_state.lookback
 
 # --------------------------------------------------------------------------- main
 
 st.title("X Keyword Search")
 st.caption("Watches one X List and shows every post that mentions your keywords.")
+
+# --- first run: pick a List, right here in the middle of the page
+if not CONFIGURED:
+    st.write("")
+    left, _ = st.columns([3, 2])
+    with left:
+        with st.form("setup", border=True):
+            st.subheader("Pick a List to watch")
+            st.text_input(
+                "Paste the address of an X List",
+                key="setup_list",
+                value=st.session_state.list_link,
+                placeholder="https://x.com/i/lists/1234567890123456789",
+            )
+            st.caption(
+                "Open any List on x.com and copy the address from the browser bar. "
+                "The List has to be public."
+            )
+            st.text_area(
+                "Keywords, one per line",
+                key="setup_kw",
+                value=st.session_state.keywords_raw,
+                height=140,
+                placeholder="ICE\nvoted against\nborder bill",
+            )
+            st.caption(
+                "A line can be a name or a phrase. Matching is whole-word and ignores capitals, "
+                'so "ICE" does not match "service".'
+            )
+            if st.form_submit_button("Start watching", type="primary", width="stretch"):
+                link = st.session_state.setup_list.strip()
+                kw = st.session_state.setup_kw.strip()
+                if not list_id_from(link):
+                    st.error("That does not look like a List address. It ends in a long number.")
+                elif not kw:
+                    st.error("Add at least one keyword.")
+                else:
+                    st.session_state.list_link = link
+                    st.session_state.keywords_raw = kw
+                    st.rerun()
+    st.stop()
 
 # First visit: check straight away so the table is populated before anyone clicks anything.
 if not st.session_state.first_load_done:

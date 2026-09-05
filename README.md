@@ -26,22 +26,25 @@ The message above the table says what happened.
 - **Asked us to slow down** — wait a few minutes and click Check now.
 - **API key or credit** — the account behind the app needs attention.
 
-## Running it locally
-
-```bash
-pip install -r requirements.txt
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml   # then fill in the key
-streamlit run streamlit_app.py
-```
-
 ## What is in here
 
 | File | What it does |
 | --- | --- |
 | `streamlit_app.py` | the web interface |
 | `scanner.py` | keyword matching, reading the List, email, CSV |
-| `requirements.txt` | Python packages |
-| `.streamlit/config.toml` | theme and server settings |
-| `.streamlit/secrets.toml.example` | the settings to fill in, as a template |
+| `requirements.txt` | Python packages the host installs |
+| `secrets.example.toml` | the settings to fill in, as a template |
 
 No keys live in the code. They are read from the host's secrets at run time.
+
+## Settings
+
+These are set in the host's secrets panel, never in the repo.
+
+| Setting | What it does |
+| --- | --- |
+| `TWITTERAPI_IO_KEY` | required, reads X through twitterapi.io |
+| `DEFAULT_LIST_URL` | the List the app opens onto |
+| `DEFAULT_KEYWORDS` | the keywords it opens with, separated by `\n` |
+| `SENDER_EMAIL` | the account summaries are sent from |
+| `SENDER_APP_PASSWORD` | a Gmail app password for that account |
